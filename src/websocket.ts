@@ -130,6 +130,14 @@ export class WebSocketClient {
     });
   }
 
+  startGuessing() {
+    if (!this.roomId) return;
+    this.send({
+      type: 'start_guessing',
+      roomId: this.roomId
+    });
+  }
+
   nextRound() {
     if (!this.roomId) return;
     this.send({

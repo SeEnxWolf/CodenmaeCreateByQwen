@@ -41,6 +41,9 @@ export interface GameState {
   masterMode: 'human' | 'ai';
   apiKey?: string;
   phase: 'lobby' | 'playing' | 'revealing' | 'gameover';
+  roundPhase: 'thinking' | 'guessing'; // thinking = мастер думает, guessing = игроки угадывают
+  phaseEndTime: number; // timestamp когда фаза закончится
+  timerEnabled: boolean;
 }
 
 export type SyncMessage =

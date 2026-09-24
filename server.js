@@ -201,7 +201,10 @@ function handleMessage(ws, message) {
         hints: [],
         gameStarted: false,
         gameOver: false,
-        phase: 'lobby'
+        phase: 'lobby',
+        roundPhase: 'thinking',
+        phaseEndTime: 0,
+        timerEnabled: true
       };
       
       rooms.set(roomId, state);
@@ -264,6 +267,11 @@ function handleMessage(ws, message) {
       
       room.gameStarted = true;
       room.phase = 'playing';
+      room.roundPhase = 'thinking';
+      room.phaseEndTime = Date.now() + 90000; // 1.5 минуты на раздумье
+      
+      // Запускаем таймер
+      setTimeout(() => handlePhaseTimeout(room.roomId), 90000);
       
       broadcast(room.roomId, {
         type: 'state_update',
@@ -277,6 +285,9 @@ function handleMessage(ws, message) {
     case 'select_word': {
       const room = rooms.get(message.roomId);
       if (!room) return;
+      
+      // Блокируем выбор во время фазы thinking
+      if (room.roundPhase === 'thinking') return;
       
       const player = room.players.find(p => p.id === message.playerId);
       if (!player || player.isEliminated) return;
@@ -386,6 +397,10 @@ function handleMessage(ws, message) {
         }
       });
       
+      // Переходим в фазу guessing
+      room.roundPhase = 'guessing';
+      room.phaseEndTime = Date.now() + 90000; // 1.5 минуты на угадывание
+      
       broadcast(room.roomId, {
         type: 'state_update',
         state: room
@@ -395,14 +410,34 @@ function handleMessage(ws, message) {
       break;
     }
     
+    case 'start_guessing': {
+      // Мастер может вручную начать фазу угадывания
+      const room = rooms.get(message.roomId);
+      if (!room || !room.players.find(p => p.id === message.playerId && p.isMaster)) return;
+      
+      room.roundPhase = 'guessing';
+      room.phaseEndTime = Date.now() + 90000;
+      
+      broadcast(room.roomId, {
+        type: 'state_update',
+        state: room
+      });
+      break;
+    }
+    
     case 'next_round': {
       const room = rooms.get(message.roomId);
       if (!room) return;
       
       room.currentRound++;
+      room.roundPhase = 'thinking';
+      room.phaseEndTime = Date.now() + 90000; // 1.5 минуты на раздумье
       room.players.forEach(p => {
         p.selectedWords = [];
       });
+      
+      // Запускаем таймер
+      setTimeout(() => handlePhaseTimeout(room.roomId), 90000);
       
       broadcast(room.roomId, {
         type: 'state_update',
@@ -412,6 +447,105 @@ function handleMessage(ws, message) {
       console.log(`🔄 Раунд ${room.currentRound} в комнате ${room.roomId}`);
       break;
     }
+    
+    case 'toggle_timer': {
+      const room = rooms.get(message.roomId);
+      if (!room) return;
+      room.timerEnabled = !room.timerEnabled;
+      broadcast(room.roomId, {
+        type: 'state_update',
+        state: room
+      });
+      break;
+    }
+  }
+}
+
+function handlePhaseTimeout(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.phase === 'gameover') return;
+  
+  // Проверяем что таймер всё ещё актуален
+  if (Date.now() < room.phaseEndTime - 1000) return;
+  
+  if (room.roundPhase === 'thinking') {
+    // Время на раздумье вышло — автоматически переходим в guessing
+    room.roundPhase = 'guessing';
+    room.phaseEndTime = Date.now() + 90000;
+    
+    broadcast(roomId, {
+      type: 'state_update',
+      state: room
+    });
+    
+    console.log(`⏰ Время на раздумье вышло в комнате ${roomId}`);
+  } else if (room.roundPhase === 'guessing') {
+    // Время на угадывание вышло — автоматически подтверждаем все выборы
+    room.players.forEach(player => {
+      if (!player.isMaster && !player.isEliminated && !player.finished && player.selectedWords.length > 0) {
+        // Автоматически подтверждаем
+        let correctCount = 0;
+        
+        for (const wordId of player.selectedWords) {
+          const card = room.cards.find(c => c.id === wordId);
+          if (!card) continue;
+          
+          if (card.type === 'black') {
+            player.isEliminated = true;
+            card.revealed = true;
+            card.revealedBy = player.id;
+            break;
+          }
+          
+          if (player.secretWords.includes(wordId)) {
+            if (!card.revealed) {
+              card.revealed = true;
+              card.revealedBy = player.id;
+              player.revealedWords.push(wordId);
+              player.score++;
+              correctCount++;
+            }
+          }
+        }
+        
+        player.maxSelections = Math.max(0, player.maxSelections - correctCount);
+        player.selectedWords = [];
+        
+        // Проверяем победу
+        const allSecretRevealed = player.secretWords.length > 0 && 
+          player.secretWords.every(id => {
+            const card = room.cards.find(c => c.id === id);
+            return card?.revealed;
+          });
+        
+        if (allSecretRevealed && !player.isEliminated) {
+          player.finished = true;
+          player.finishTime = Date.now();
+          
+          const firstFinisher = room.players
+            .filter(p => p.finished)
+            .sort((a, b) => (a.finishTime || 0) - (b.finishTime || 0))[0];
+          
+          if (firstFinisher.id === player.id) {
+            room.gameOver = true;
+            room.winner = player.id;
+            room.phase = 'gameover';
+          }
+        }
+      }
+    });
+    
+    // Переходим в следующую фазу thinking
+    room.currentRound++;
+    room.roundPhase = 'thinking';
+    room.phaseEndTime = Date.now() + 90000;
+    
+    broadcast(roomId, {
+      type: 'state_update',
+      state: room
+    });
+    
+    console.log(`⏰ Время на угадывание вышло в комнате ${roomId}, переход к раунду ${room.currentRound}`);
   }
 }
 
