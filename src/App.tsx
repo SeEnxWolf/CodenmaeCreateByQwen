@@ -1,81 +1,82 @@
-import { useState, useEffect, useCallback } from 'react';
-import { GameStore } from './store';
+import { useState, useEffect } from 'react';
 import { GameState, Player } from './types';
+import { getWebSocketClient } from './websocket';
 import { GameView } from './components/GameView';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type Screen = 'home' | 'create' | 'join' | 'game';
 
-interface PlayerSession {
-  roomId: string;
-  playerId: string;
-  playerName: string;
-}
-
 function App() {
   const [screen, setScreen] = useState<Screen>('home');
-  const [store, setStore] = useState<GameStore | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
   const [roomIdInput, setRoomIdInput] = useState('');
   const [playerName, setPlayerName] = useState('');
   const [error, setError] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
+
+  const wsClient = getWebSocketClient();
 
   useEffect(() => {
-    const session = localStorage.getItem('codename_session');
-    if (session) {
-      try {
-        const parsed: PlayerSession = JSON.parse(session);
-        const gameStore = new GameStore(parsed.roomId);
-        setStore(gameStore);
-        const state = gameStore.getState();
-        setGameState(state);
-        const player = state.players.find((p) => p.id === parsed.playerId);
-        if (player) {
-          setCurrentPlayer(player);
-          setScreen('game');
-        }
-      } catch {
-        localStorage.removeItem('codename_session');
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!store) return;
-    const unsub = store.subscribe((state) => {
-      setGameState({ ...state });
-      if (currentPlayer) {
-        const updated = state.players.find((p) => p.id === currentPlayer.id);
-        if (updated) setCurrentPlayer({ ...updated });
+    const unsubscribe = wsClient.onMessage((message) => {
+      switch (message.type) {
+        case 'room_created':
+        case 'room_joined':
+          setGameState(message.state);
+          const player = message.state.players.find((p: Player) => p.id === message.playerId);
+          if (player) {
+            setCurrentPlayer(player);
+            setScreen('game');
+          }
+          setConnectionStatus('connected');
+          break;
+          
+        case 'state_update':
+          setGameState(message.state);
+          if (currentPlayer) {
+            const updatedPlayer = message.state.players.find((p: Player) => p.id === currentPlayer.id);
+            if (updatedPlayer) {
+              setCurrentPlayer({ ...updatedPlayer });
+            }
+          }
+          break;
+          
+        case 'error':
+          setError(message.message);
+          setConnectionStatus('error');
+          break;
       }
     });
-    return unsub;
-  }, [store, currentPlayer?.id]);
 
-  const handleCreateRoom = useCallback(() => {
+    // Проверка подключения
+    const checkConnection = setInterval(() => {
+      if (wsClient.isConnected()) {
+        setConnectionStatus('connected');
+      } else {
+        setConnectionStatus('connecting');
+      }
+    }, 1000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(checkConnection);
+    };
+  }, [currentPlayer]);
+
+  const handleCreateRoom = () => {
     if (!playerName.trim()) {
       setError('Введите имя');
       return;
     }
-    const roomId = GameStore.createRoom();
-    const gameStore = new GameStore(roomId);
-    const player = gameStore.addPlayer(playerName.trim(), true, true);
-    
-    localStorage.setItem('codename_session', JSON.stringify({
-      roomId,
-      playerId: player.id,
-      playerName: player.name,
-    }));
-
-    setStore(gameStore);
-    setGameState(gameStore.getState());
-    setCurrentPlayer(player);
-    setScreen('game');
+    if (!wsClient.isConnected()) {
+      setError('Нет подключения к серверу. Запустите сервер командой: node server.js');
+      return;
+    }
+    wsClient.createRoom(playerName.trim());
     setError('');
-  }, [playerName]);
+  };
 
-  const handleJoinRoom = useCallback(() => {
+  const handleJoinRoom = () => {
     if (!playerName.trim()) {
       setError('Введите имя');
       return;
@@ -84,39 +85,20 @@ function App() {
       setError('Введите код комнаты');
       return;
     }
-    if (!GameStore.roomExists(roomIdInput.trim())) {
-      setError('Комната не найдена. Проверьте код.');
+    if (!wsClient.isConnected()) {
+      setError('Нет подключения к серверу. Запустите сервер командой: node server.js');
       return;
     }
-
-    const gameStore = new GameStore(roomIdInput.trim());
-    const player = gameStore.addPlayer(playerName.trim(), false, false);
-    
-    localStorage.setItem('codename_session', JSON.stringify({
-      roomId: roomIdInput.trim(),
-      playerId: player.id,
-      playerName: player.name,
-    }));
-
-    setStore(gameStore);
-    setGameState(gameStore.getState());
-    setCurrentPlayer(player);
-    setScreen('game');
+    wsClient.joinRoom(roomIdInput.trim(), playerName.trim());
     setError('');
-  }, [playerName, roomIdInput]);
+  };
 
-  const handleLeaveGame = useCallback(() => {
-    if (store && currentPlayer) {
-      store.removePlayer(currentPlayer.id);
-      store.destroy();
-    }
-    localStorage.removeItem('codename_session');
-    setStore(null);
+  const handleLeaveGame = () => {
     setGameState(null);
     setCurrentPlayer(null);
     setScreen('home');
     setPlayerName('');
-  }, [store, currentPlayer]);
+  };
 
   return (
     <AnimatePresence mode="wait">
@@ -126,6 +108,7 @@ function App() {
           setPlayerName={setPlayerName}
           error={error}
           setError={setError}
+          connectionStatus={connectionStatus}
           onCreateRoom={() => { setError(''); setScreen('create'); }}
           onJoinRoom={() => { setError(''); setScreen('join'); }}
         />
@@ -136,6 +119,7 @@ function App() {
           setPlayerName={setPlayerName}
           error={error}
           setError={setError}
+          connectionStatus={connectionStatus}
           onBack={() => setScreen('home')}
           onCreate={handleCreateRoom}
         />
@@ -148,13 +132,14 @@ function App() {
           setRoomId={setRoomIdInput}
           error={error}
           setError={setError}
+          connectionStatus={connectionStatus}
           onBack={() => setScreen('home')}
           onJoin={handleJoinRoom}
         />
       )}
-      {screen === 'game' && gameState && currentPlayer && store && (
+      {screen === 'game' && gameState && currentPlayer && (
         <GameView
-          store={store}
+          wsClient={wsClient}
           gameState={gameState}
           currentPlayer={currentPlayer}
           onLeave={handleLeaveGame}
@@ -165,11 +150,12 @@ function App() {
 }
 
 // Home Screen
-function HomeScreen({ playerName, setPlayerName, error, setError, onCreateRoom, onJoinRoom }: {
+function HomeScreen({ playerName, setPlayerName, error, setError, connectionStatus, onCreateRoom, onJoinRoom }: {
   playerName: string;
   setPlayerName: (v: string) => void;
   error: string;
   setError: (v: string) => void;
+  connectionStatus: 'connecting' | 'connected' | 'error';
   onCreateRoom: () => void;
   onJoinRoom: () => void;
 }) {
@@ -183,6 +169,19 @@ function HomeScreen({ playerName, setPlayerName, error, setError, onCreateRoom, 
       className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900/80 to-gray-900 flex items-center justify-center p-4"
     >
       <div className="max-w-lg w-full space-y-6">
+        {/* Connection status */}
+        <div className="flex justify-center">
+          <div className={`px-3 py-1 rounded-full text-xs font-medium ${
+            connectionStatus === 'connected' ? 'bg-green-900/30 text-green-400 border border-green-700' :
+            connectionStatus === 'connecting' ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700' :
+            'bg-red-900/30 text-red-400 border border-red-700'
+          }`}>
+            {connectionStatus === 'connected' && '🟢 Сервер подключен'}
+            {connectionStatus === 'connecting' && '🟡 Подключение...'}
+            {connectionStatus === 'error' && '🔴 Нет подключения к серверу'}
+          </div>
+        </div>
+
         {/* Title */}
         <motion.div
           initial={{ y: -20, opacity: 0 }}
@@ -286,7 +285,7 @@ function HomeScreen({ playerName, setPlayerName, error, setError, onCreateRoom, 
                     <span>🏆 Побеждает тот, кто первым откроет все свои слова</span>
                   </div>
                   <div className="mt-3 pt-2 border-t border-gray-700/30 text-gray-400 text-xs">
-                    💡 Для мультиплеера: откройте несколько вкладок или поделитесь кодом комнаты
+                    💡 Для мультиплеера: запустите сервер (<code className="bg-gray-700 px-1 rounded">node server.js</code>) и поделитесь кодом комнаты
                   </div>
                 </div>
               </motion.div>
@@ -299,11 +298,12 @@ function HomeScreen({ playerName, setPlayerName, error, setError, onCreateRoom, 
 }
 
 // Create Screen
-function CreateScreen({ playerName, setPlayerName, error, setError, onBack, onCreate }: {
+function CreateScreen({ playerName, setPlayerName, error, setError, connectionStatus, onBack, onCreate }: {
   playerName: string;
   setPlayerName: (v: string) => void;
   error: string;
   setError: (v: string) => void;
+  connectionStatus: 'connecting' | 'connected' | 'error';
   onBack: () => void;
   onCreate: () => void;
 }) {
@@ -345,9 +345,16 @@ function CreateScreen({ playerName, setPlayerName, error, setError, onBack, onCr
               <p className="text-red-400 text-sm text-center bg-red-900/20 py-2 rounded-lg">{error}</p>
             )}
 
+            {connectionStatus !== 'connected' && (
+              <p className="text-yellow-400 text-xs text-center bg-yellow-900/20 py-2 rounded-lg">
+                ⚠️ Сервер не подключен. Запустите: <code className="bg-gray-700 px-1 rounded">node server.js</code>
+              </p>
+            )}
+
             <button
               onClick={onCreate}
-              className="w-full py-3.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-xl hover:from-purple-500 hover:to-pink-500 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-purple-500/20"
+              disabled={connectionStatus !== 'connected'}
+              className="w-full py-3.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-xl hover:from-purple-500 hover:to-pink-500 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-purple-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               🎲 Создать комнату
             </button>
@@ -359,13 +366,14 @@ function CreateScreen({ playerName, setPlayerName, error, setError, onBack, onCr
 }
 
 // Join Screen
-function JoinScreen({ playerName, setPlayerName, roomId, setRoomId, error, setError, onBack, onJoin }: {
+function JoinScreen({ playerName, setPlayerName, roomId, setRoomId, error, setError, connectionStatus, onBack, onJoin }: {
   playerName: string;
   setPlayerName: (v: string) => void;
   roomId: string;
   setRoomId: (v: string) => void;
   error: string;
   setError: (v: string) => void;
+  connectionStatus: 'connecting' | 'connected' | 'error';
   onBack: () => void;
   onJoin: () => void;
 }) {
@@ -417,9 +425,16 @@ function JoinScreen({ playerName, setPlayerName, roomId, setRoomId, error, setEr
               <p className="text-red-400 text-sm text-center bg-red-900/20 py-2 rounded-lg">{error}</p>
             )}
 
+            {connectionStatus !== 'connected' && (
+              <p className="text-yellow-400 text-xs text-center bg-yellow-900/20 py-2 rounded-lg">
+                ⚠️ Сервер не подключен. Запустите: <code className="bg-gray-700 px-1 rounded">node server.js</code>
+              </p>
+            )}
+
             <button
               onClick={onJoin}
-              className="w-full py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-500 hover:to-emerald-500 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-green-500/20"
+              disabled={connectionStatus !== 'connected'}
+              className="w-full py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-500 hover:to-emerald-500 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-green-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               🚪 Войти в комнату
             </button>

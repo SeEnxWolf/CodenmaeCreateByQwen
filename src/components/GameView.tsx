@@ -1,26 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
-import { GameStore } from '../store';
 import { GameState, Player } from '../types';
+import { WebSocketClient } from '../websocket';
 import { motion } from 'framer-motion';
 import { Copy, LogOut, Users, Crown, MessageSquare, Check, Bot, Key, History } from 'lucide-react';
-import { generateAIHint } from '../ai';
 import confetti from 'canvas-confetti';
 import { playSelectSound, playConfirmSound, playHintSound, playWinSound, resumeAudioContext } from '../sounds';
 
 interface Props {
-  store: GameStore;
+  wsClient: WebSocketClient;
   gameState: GameState;
   currentPlayer: Player;
   onLeave: () => void;
 }
 
-export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
+export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props) {
   const [showCopied, setShowCopied] = useState(false);
   const [hintWord, setHintWord] = useState('');
   const [hintCount, setHintCount] = useState(1);
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKey, setApiKey] = useState(gameState.apiKey || '');
-  const [aiLoading, setAiLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
   const prevHintCount = useRef(gameState.hints.length);
@@ -48,7 +44,7 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
   }
 
   if (gameState.phase === 'lobby') {
-    return <LobbyView store={store} gameState={gameState} currentPlayer={currentPlayer} onLeave={onLeave} />;
+    return <LobbyView wsClient={wsClient} gameState={gameState} currentPlayer={currentPlayer} onLeave={onLeave} />;
   }
 
   const isMaster = currentPlayer.isMaster;
@@ -57,56 +53,24 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
   const handleSelectWord = (wordId: string) => {
     if (isEliminated) return;
     playSelectSound();
-    store.selectWord(currentPlayer.id, wordId);
+    wsClient.selectWord(currentPlayer.id, wordId);
   };
 
   const handleConfirm = () => {
     playConfirmSound();
-    store.confirmSelection(currentPlayer.id);
+    wsClient.confirmSelection(currentPlayer.id);
   };
 
   const handleGiveHint = () => {
     if (hintWord.trim() && hintCount > 0) {
-      store.giveHint({ word: hintWord.trim(), count: hintCount });
+      wsClient.giveHint({ word: hintWord.trim(), count: hintCount });
       setHintWord('');
       setHintCount(1);
     }
   };
 
-  const handleAIHint = async () => {
-    if (!apiKey) {
-      setShowApiKey(true);
-      return;
-    }
-    setAiLoading(true);
-    try {
-      const secretWords = gameState.cards.filter(c => c.type === 'secret').map(c => c.word);
-      const allWords = gameState.cards.map(c => c.word);
-      const blackWord = gameState.cards.find(c => c.type === 'black')?.word || '';
-      const previousHints = gameState.hints.map(h => h.word);
-      
-      const hint = await generateAIHint(secretWords, allWords, blackWord, gameState.currentRound, previousHints, apiKey);
-      setHintWord(hint.word);
-      setHintCount(hint.count);
-      
-      // Save API key
-      if (apiKey !== gameState.apiKey) {
-        store.setApiKey(apiKey);
-      }
-    } catch (err) {
-      console.error('AI hint error:', err);
-      alert('Ошибка при получении подсказки от ИИ. Проверьте API ключ.');
-    }
-    setAiLoading(false);
-  };
-
-  const handleSaveApiKey = () => {
-    store.setApiKey(apiKey);
-    setShowApiKey(false);
-  };
-
   const handleNextRound = () => {
-    store.nextRound();
+    wsClient.nextRound();
   };
 
   const copyRoomId = () => {
@@ -157,6 +121,18 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
       className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-3 sm:p-4"
     >
       <div className="max-w-6xl mx-auto">
+        {/* Notification toast */}
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-4 left-1/2 z-50 bg-purple-600/90 backdrop-blur-sm text-white px-4 py-2 rounded-xl shadow-lg border border-purple-400/30 text-sm font-medium"
+          >
+            🔔 {notification}
+          </motion.div>
+        )}
+
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 flex-wrap">
@@ -210,18 +186,6 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
           ))}
         </div>
 
-        {/* Notification toast */}
-        {notification && (
-          <motion.div
-            initial={{ opacity: 0, y: -20, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, x: '-50%' }}
-            exit={{ opacity: 0, y: -20 }}
-            className="fixed top-4 left-1/2 z-50 bg-purple-600/90 backdrop-blur-sm text-white px-4 py-2 rounded-xl shadow-lg border border-purple-400/30 text-sm font-medium"
-          >
-            🔔 {notification}
-          </motion.div>
-        )}
-
         {/* Current hint */}
         {latestHint && (
           <motion.div
@@ -253,49 +217,14 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
                 <Crown size={14} className="text-yellow-400" />
                 Панель мастера
               </h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowHistory(!showHistory)}
-                  className="p-1.5 text-gray-400 hover:text-white transition rounded-lg hover:bg-gray-700"
-                  title="История подсказок"
-                >
-                  <History size={14} />
-                </button>
-                <button
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="p-1.5 text-gray-400 hover:text-white transition rounded-lg hover:bg-gray-700"
-                  title="API ключ"
-                >
-                  <Key size={14} />
-                </button>
-              </div>
-            </div>
-
-            {/* API Key input */}
-            {showApiKey && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="mb-3 p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className="p-1.5 text-gray-400 hover:text-white transition rounded-lg hover:bg-gray-700"
+                title="История подсказок"
               >
-                <label className="text-gray-300 text-xs block mb-1">DeepSeek API ключ:</label>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-..."
-                    className="flex-1 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                  />
-                  <button
-                    onClick={handleSaveApiKey}
-                    className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition"
-                  >
-                    Сохранить
-                  </button>
-                </div>
-              </motion.div>
-            )}
+                <History size={14} />
+              </button>
+            </div>
 
             {/* History */}
             {showHistory && gameState.hints.length > 0 && (
@@ -347,14 +276,6 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
                 Дать
               </button>
               <button
-                onClick={handleAIHint}
-                disabled={aiLoading}
-                className="px-3 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-sm rounded-lg hover:from-indigo-500 hover:to-purple-500 transition disabled:opacity-50 flex items-center gap-1"
-              >
-                <Bot size={14} />
-                {aiLoading ? '...' : 'ИИ'}
-              </button>
-              <button
                 onClick={handleNextRound}
                 className="px-3 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-500 transition"
               >
@@ -362,14 +283,6 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
               </button>
             </div>
           </motion.div>
-        )}
-
-        {/* AI hint button for players (if master is AI) */}
-        {!isMaster && gameState.masterMode === 'ai' && (
-          <div className="mb-3 text-center text-gray-400 text-sm">
-            <Bot size={14} className="inline mr-1" />
-            Мастер — ИИ. Ожидайте подсказку.
-          </div>
         )}
 
         {/* Eliminated notice */}
@@ -382,6 +295,23 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
             <p className="text-red-300 font-semibold text-sm">💀 Вы дисквалифицированы!</p>
             <p className="text-red-400/70 text-xs">Вы выбрали чёрное слово. Теперь вы наблюдатель.</p>
           </motion.div>
+        )}
+
+        {/* Player progress */}
+        {!isMaster && !isEliminated && (
+          <div className="max-w-xs mx-auto mb-3">
+            <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+              <span>Ваш прогресс</span>
+              <span>{currentPlayer.score}/{currentPlayer.secretWords.length}</span>
+            </div>
+            <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${(currentPlayer.score / Math.max(currentPlayer.secretWords.length, 1)) * 100}%` }}
+                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"
+              />
+            </div>
+          </div>
         )}
 
         {/* Game Board */}
@@ -408,23 +338,6 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
             </motion.button>
           ))}
         </div>
-
-        {/* Player progress */}
-        {!isMaster && !isEliminated && (
-          <div className="max-w-xs mx-auto mb-3">
-            <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-              <span>Ваш прогресс</span>
-              <span>{currentPlayer.score}/{currentPlayer.secretWords.length}</span>
-            </div>
-            <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${(currentPlayer.score / Math.max(currentPlayer.secretWords.length, 1)) * 100}%` }}
-                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"
-              />
-            </div>
-          </div>
-        )}
 
         {/* Confirm button */}
         {!isMaster && !isEliminated && currentPlayer.selectedWords.length > 0 && (
@@ -482,7 +395,7 @@ export function GameView({ store, gameState, currentPlayer, onLeave }: Props) {
 }
 
 // Lobby View
-function LobbyView({ store, gameState, currentPlayer, onLeave }: { store: GameStore; gameState: GameState; currentPlayer: Player; onLeave: () => void }) {
+function LobbyView({ wsClient, gameState, currentPlayer, onLeave }: { wsClient: WebSocketClient; gameState: GameState; currentPlayer: Player; onLeave: () => void }) {
   const [showCopied, setShowCopied] = useState(false);
 
   const copyRoomId = () => {
@@ -493,7 +406,7 @@ function LobbyView({ store, gameState, currentPlayer, onLeave }: { store: GameSt
 
   const handleStart = () => {
     if (gameState.players.length >= 2) {
-      store.startGame();
+      wsClient.startGame();
     }
   };
 
@@ -516,7 +429,7 @@ function LobbyView({ store, gameState, currentPlayer, onLeave }: { store: GameSt
               </button>
             </div>
             <p className="text-gray-500 text-xs mt-2">
-              Откройте новую вкладку → "Присоединиться" → введите код
+              Откройте игру в другой вкладке/устройстве → "Присоединиться" → введите код
             </p>
           </div>
 
@@ -577,14 +490,12 @@ function LobbyView({ store, gameState, currentPlayer, onLeave }: { store: GameSt
 }
 
 // Game Over Overlay
-function GameOverOverlay({ gameState, currentPlayer, onLeave }: { gameState: GameState; currentPlayer: Player; onLeave: () => void }) {
+function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; currentPlayer: Player; onLeave: () => void }) {
   const winner = gameState.players.find((p) => p.id === gameState.winner);
 
   useEffect(() => {
-    // Play win sound
     playWinSound();
     
-    // Fire confetti
     const duration = 3000;
     const end = Date.now() + duration;
 
