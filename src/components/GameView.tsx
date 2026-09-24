@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { GameState, Player } from '../types';
 import { WebSocketClient } from '../websocket';
 import { motion } from 'framer-motion';
-import { Copy, LogOut, Users, Crown, MessageSquare, Check, Bot, Key, History } from 'lucide-react';
+import { Copy, LogOut, Users, Crown, MessageSquare, Check, History } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { playSelectSound, playConfirmSound, playHintSound, playWinSound, resumeAudioContext } from '../sounds';
 
@@ -17,9 +17,10 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
   const [showCopied, setShowCopied] = useState(false);
   const [hintWord, setHintWord] = useState('');
   const [hintCount, setHintCount] = useState(1);
-  const [showHistory, setShowHistory] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
+  const [timeLeft, setTimeLeft] = useState(0);
   const prevHintCount = useRef(gameState.hints.length);
+  const isThinking = gameState.roundPhase === 'thinking';
 
   // Resume audio context on first interaction
   useEffect(() => {
@@ -39,6 +40,19 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
     prevHintCount.current = gameState.hints.length;
   }, [gameState.hints.length]);
 
+  // Timer countdown
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (gameState.phaseEndTime > 0) {
+        const remaining = Math.max(0, gameState.phaseEndTime - Date.now());
+        setTimeLeft(Math.ceil(remaining / 1000));
+      } else {
+        setTimeLeft(0);
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, [gameState.phaseEndTime]);
+
   if (gameState.phase === 'gameover') {
     return <GameOverOverlay gameState={gameState} currentPlayer={currentPlayer} onLeave={onLeave} />;
   }
@@ -52,6 +66,9 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
 
   const handleSelectWord = (wordId: string) => {
     if (isEliminated) return;
+    
+    // Блокируем выбор во время фазы thinking
+    if (isThinking) return;
     
     // Проверяем лимит выбора
     const isDeselecting = currentPlayer.selectedWords.includes(wordId);
@@ -120,6 +137,9 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
     }
     
     // Обычное неоткрытое слово
+    if (isThinking) {
+      return 'bg-gradient-to-br from-gray-700/60 to-gray-800/60 border-gray-600/50 cursor-not-allowed opacity-60';
+    }
     return 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600 hover:border-purple-500 hover:from-gray-600 hover:to-gray-700 cursor-pointer hover:shadow-lg hover:shadow-purple-500/10';
   };
 
@@ -195,6 +215,28 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           ))}
         </div>
 
+        {/* Timer */}
+        {gameState.phaseEndTime > 0 && timeLeft > 0 && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={`mb-3 rounded-xl p-3 text-center backdrop-blur-sm border ${
+              isThinking 
+                ? 'bg-gradient-to-r from-orange-800/40 to-red-800/40 border-orange-500/40' 
+                : 'bg-gradient-to-r from-blue-800/40 to-cyan-800/40 border-blue-500/40'
+            }`}
+          >
+            <div className="flex items-center justify-center gap-3">
+              <span className="text-gray-300 text-sm">
+                {isThinking ? '🧠 Мастер думает' : '🎯 Игроки угадывают'}
+              </span>
+              <span className={`text-2xl font-mono font-bold ${timeLeft <= 10 ? 'text-red-400 animate-pulse' : 'text-white'}`}>
+                {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+          </motion.div>
+        )}
+
         {/* Current hint */}
         {latestHint && (
           <motion.div
@@ -214,6 +256,29 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           </motion.div>
         )}
 
+        {/* Hints history */}
+        {gameState.hints.length > 1 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mb-3 bg-gray-800/30 border border-gray-700/50 rounded-xl p-3 backdrop-blur-sm"
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <History size={14} className="text-gray-400" />
+              <span className="text-gray-400 text-xs font-medium">Предыдущие подсказки:</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {gameState.hints.slice(0, -1).map((h, i) => (
+                <div key={i} className="flex items-center gap-1 bg-gray-700/40 px-2 py-1 rounded-lg text-xs">
+                  <span className="text-gray-500">R{h.round}</span>
+                  <span className="text-white font-medium">{h.word}</span>
+                  <span className="text-yellow-300">{h.count}</span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
         {/* Master panel */}
         {isMaster && (
           <motion.div
@@ -221,38 +286,10 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
             animate={{ opacity: 1 }}
             className="mb-3 bg-gray-800/40 border border-gray-700 rounded-xl p-3 sm:p-4 backdrop-blur-sm"
           >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-white font-semibold text-sm flex items-center gap-2">
-                <Crown size={14} className="text-yellow-400" />
-                Панель мастера
-              </h3>
-              <button
-                onClick={() => setShowHistory(!showHistory)}
-                className="p-1.5 text-gray-400 hover:text-white transition rounded-lg hover:bg-gray-700"
-                title="История подсказок"
-              >
-                <History size={14} />
-              </button>
-            </div>
-
-            {/* History */}
-            {showHistory && gameState.hints.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="mb-3 p-3 bg-gray-900/50 rounded-lg border border-gray-700 max-h-32 overflow-y-auto"
-              >
-                <p className="text-gray-400 text-xs mb-2">История подсказок:</p>
-                {gameState.hints.map((h, i) => (
-                  <div key={i} className="text-sm text-gray-300 py-0.5">
-                    <span className="text-gray-500">R{h.round}:</span>{' '}
-                    <span className="text-white font-medium">{h.word}</span>
-                    {' — '}
-                    <span className="text-yellow-300">{h.count}</span>
-                  </div>
-                ))}
-              </motion.div>
-            )}
+            <h3 className="text-white font-semibold text-sm flex items-center gap-2 mb-3">
+              <Crown size={14} className="text-yellow-400" />
+              Панель мастера
+            </h3>
 
             {/* Hint input */}
             <div className="flex flex-wrap gap-2 items-end">
@@ -282,15 +319,37 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
                 disabled={!hintWord.trim()}
                 className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Дать
+                Дать подсказку
               </button>
-              <button
-                onClick={handleNextRound}
-                className="px-3 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-500 transition"
-              >
-                Далее →
-              </button>
+              {isThinking && gameState.hints.filter(h => h.round === gameState.currentRound).length === 0 && (
+                <button
+                  onClick={() => wsClient.startGuessing()}
+                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition"
+                >
+                  Пропустить →
+                </button>
+              )}
+              {!isThinking && (
+                <button
+                  onClick={handleNextRound}
+                  className="px-3 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-500 transition"
+                >
+                  Далее →
+                </button>
+              )}
             </div>
+          </motion.div>
+        )}
+
+        {/* Thinking phase notice for players */}
+        {!isMaster && isThinking && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mb-3 bg-orange-900/20 border border-orange-700/50 rounded-xl p-3 text-center"
+          >
+            <p className="text-orange-300 font-semibold text-sm">🧠 Мастер думает над подсказкой...</p>
+            <p className="text-orange-400/70 text-xs">После подсказки начнётся время на угадывание</p>
           </motion.div>
         )}
 
