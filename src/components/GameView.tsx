@@ -52,6 +52,14 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
 
   const handleSelectWord = (wordId: string) => {
     if (isEliminated) return;
+    
+    // Проверяем лимит выбора
+    const isDeselecting = currentPlayer.selectedWords.includes(wordId);
+    if (!isDeselecting && currentPlayer.selectedWords.length >= currentPlayer.maxSelections) {
+      // Лимит достигнут — нельзя выбрать больше
+      return;
+    }
+    
     playSelectSound();
     wsClient.selectWord(currentPlayer.id, wordId);
   };
@@ -83,6 +91,7 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
 
   const getCardStyle = (cardId: string, cardType: string, revealed: boolean) => {
     if (isMaster) {
+      // Мастер видит всё
       if (revealed) return 'bg-gray-600 border-gray-500 opacity-50';
       if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20';
       if (cardType === 'secret') return 'bg-gradient-to-br from-blue-600 to-blue-800 border-blue-400 shadow-lg shadow-blue-500/20';
@@ -90,27 +99,27 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
     }
 
     if (isEliminated) {
+      // Дисквалифицированный видит только открытые
       if (revealed) return 'bg-gray-600 border-gray-500 opacity-50';
       return 'bg-gray-800/50 border-gray-700 cursor-not-allowed opacity-70';
     }
 
+    // Обычный игрок — НЕ видит свои загаданные слова
     if (revealed && currentPlayer.revealedWords.includes(cardId)) {
+      // Это слово игрок уже открыл (правильно)
       return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 scale-95 shadow-lg shadow-green-500/20';
     }
     if (revealed) {
+      // Кто-то другой открыл
       return 'bg-gray-600 border-gray-500 opacity-60';
     }
 
-    if (currentPlayer.secretWords.includes(cardId)) {
-      if (currentPlayer.selectedWords.includes(cardId)) {
-        return 'bg-gradient-to-br from-yellow-400 to-amber-500 border-yellow-300 scale-105 ring-2 ring-yellow-300 shadow-lg shadow-yellow-500/30';
-      }
-      return 'bg-gradient-to-br from-blue-900/80 to-indigo-950/80 border-blue-500/50 ring-1 ring-blue-400/40 shadow-inner';
-    }
-
+    // Выбранное слово
     if (currentPlayer.selectedWords.includes(cardId)) {
       return 'bg-gradient-to-br from-yellow-400 to-amber-500 border-yellow-300 scale-105 ring-2 ring-yellow-300 shadow-lg shadow-yellow-500/30';
     }
+    
+    // Обычное неоткрытое слово
     return 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600 hover:border-purple-500 hover:from-gray-600 hover:to-gray-700 cursor-pointer hover:shadow-lg hover:shadow-purple-500/10';
   };
 
@@ -181,7 +190,7 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
               {p.name}
               {p.finished && ' 🏆'}
               {p.isEliminated && ' 💀'}
-              {!p.isMaster && !p.isEliminated && !p.finished && ` (${p.score}/${p.secretWords.length})`}
+              {!p.isMaster && !p.isEliminated && !p.finished && ` (✓${p.score})`}
             </div>
           ))}
         </div>
@@ -297,20 +306,22 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           </motion.div>
         )}
 
-        {/* Player progress */}
+        {/* Player info */}
         {!isMaster && !isEliminated && (
-          <div className="max-w-xs mx-auto mb-3">
+          <div className="max-w-sm mx-auto mb-3">
             <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-              <span>Ваш прогресс</span>
-              <span>{currentPlayer.score}/{currentPlayer.secretWords.length}</span>
+              <span>Угадано слов</span>
+              <span className="text-green-400">{currentPlayer.score}</span>
             </div>
-            <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${(currentPlayer.score / Math.max(currentPlayer.secretWords.length, 1)) * 100}%` }}
-                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"
-              />
+            <div className="flex items-center justify-center gap-2 bg-gray-800/40 rounded-lg px-3 py-2 border border-gray-700">
+              <span className="text-gray-400 text-xs">Можно выбрать:</span>
+              <span className={`text-lg font-bold ${currentPlayer.maxSelections > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                {currentPlayer.selectedWords.length} / {currentPlayer.maxSelections}
+              </span>
             </div>
+            {currentPlayer.maxSelections === 0 && (
+              <p className="text-center text-gray-500 text-xs mt-1">Ожидайте подсказку от мастера</p>
+            )}
           </div>
         )}
 
@@ -339,6 +350,19 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           ))}
         </div>
 
+        {/* Selection limit warning */}
+        {!isMaster && !isEliminated && currentPlayer.selectedWords.length >= currentPlayer.maxSelections && currentPlayer.maxSelections > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-center mb-2"
+          >
+            <span className="text-yellow-400 text-xs bg-yellow-900/20 px-3 py-1 rounded-full border border-yellow-700/30">
+              ⚡ Лимит достигнут — подтвердите выбор или уберите лишнее
+            </span>
+          </motion.div>
+        )}
+
         {/* Confirm button */}
         {!isMaster && !isEliminated && currentPlayer.selectedWords.length > 0 && (
           <motion.div
@@ -350,7 +374,7 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
               onClick={handleConfirm}
               className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-500 hover:to-emerald-500 transition transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20"
             >
-              ✓ Подтвердить выбор ({currentPlayer.selectedWords.length})
+              ✓ Подтвердить выбор ({currentPlayer.selectedWords.length}/{currentPlayer.maxSelections})
             </button>
           </motion.div>
         )}
@@ -375,16 +399,16 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           ) : !isEliminated ? (
             <>
               <div className="flex items-center gap-1.5">
-                <div className="w-3 h-3 rounded bg-gradient-to-br from-blue-900/80 to-indigo-950/80 border border-blue-500/50"></div>
-                <span className="text-gray-400">Ваши слова</span>
-              </div>
-              <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded bg-gradient-to-br from-yellow-400 to-amber-500 border border-yellow-300"></div>
-                <span className="text-gray-400">Выбранные</span>
+                <span className="text-gray-400">Выбранные вами</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded bg-gradient-to-br from-green-500 to-emerald-600 border border-green-400"></div>
                 <span className="text-gray-400">Угаданные</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-700 to-gray-800 border border-gray-600"></div>
+                <span className="text-gray-400">Неоткрытые</span>
               </div>
             </>
           ) : null}
@@ -616,7 +640,7 @@ function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; current
                   <span className="text-white text-sm">{p.name}</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-300">{p.score}/{p.secretWords.length}</span>
+                  <span className="text-gray-300">✓ {p.score} слов</span>
                   {p.finished && <span className="text-green-400">🏆</span>}
                   {p.isEliminated && <span className="text-red-400">💀</span>}
                 </div>

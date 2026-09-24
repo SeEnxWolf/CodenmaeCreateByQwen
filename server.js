@@ -189,6 +189,7 @@ function handleMessage(ws, message) {
         selectedWords: [],
         score: 0,
         finished: false,
+        maxSelections: 0,
         ws
       };
       
@@ -234,6 +235,7 @@ function handleMessage(ws, message) {
         selectedWords: [],
         score: 0,
         finished: false,
+        maxSelections: 0,
         ws
       };
       
@@ -280,8 +282,14 @@ function handleMessage(ws, message) {
       if (!player || player.isEliminated) return;
       
       if (player.selectedWords.includes(message.wordId)) {
+        // Снимаем выделение
         player.selectedWords = player.selectedWords.filter(id => id !== message.wordId);
       } else {
+        // Проверяем лимит
+        if (player.selectedWords.length >= player.maxSelections) {
+          // Лимит достигнут — не добавляем
+          return;
+        }
         player.selectedWords.push(message.wordId);
       }
       
@@ -298,6 +306,8 @@ function handleMessage(ws, message) {
       
       const player = room.players.find(p => p.id === message.playerId);
       if (!player || player.isEliminated) return;
+      
+      let correctCount = 0;
       
       for (const wordId of player.selectedWords) {
         const card = room.cards.find(c => c.id === wordId);
@@ -316,9 +326,14 @@ function handleMessage(ws, message) {
             card.revealedBy = player.id;
             player.revealedWords.push(wordId);
             player.score++;
+            correctCount++;
           }
         }
       }
+      
+      // Уменьшаем maxSelections на количество правильных слов
+      // (неправильные не тратят лимит — они просто не засчитываются)
+      player.maxSelections = Math.max(0, player.maxSelections - correctCount);
       
       player.selectedWords = [];
       
@@ -362,6 +377,13 @@ function handleMessage(ws, message) {
         round: room.currentRound,
         timestamp: Date.now(),
         fromMaster: true
+      });
+      
+      // Добавляем N к maxSelections каждого активного игрока
+      room.players.forEach(p => {
+        if (!p.isMaster && !p.isEliminated && !p.finished) {
+          p.maxSelections += message.hint.count;
+        }
       });
       
       broadcast(room.roomId, {
@@ -421,15 +443,21 @@ function sanitizeState(state, playerId) {
   const player = state.players.find(p => p.id === playerId);
   if (!player) return state;
   
+  // Мастер видит всё
   if (player.isMaster) {
-    return state;
+    return {
+      ...state,
+      players: state.players.map(p => ({ ...p, ws: undefined }))
+    };
   }
   
+  // Для обычных игроков: скрываем secretWords (и свои, и чужие)
   const sanitized = {
     ...state,
     players: state.players.map(p => ({
       ...p,
-      ws: undefined
+      ws: undefined,
+      secretWords: [] // Скрываем от всех игроков
     }))
   };
   

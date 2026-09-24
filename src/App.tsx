@@ -266,15 +266,15 @@ function HomeScreen({ playerName, setPlayerName, error, setError, connectionStat
                   </div>
                   <div className="flex gap-2">
                     <span className="text-purple-400 font-bold">2.</span>
-                    <span>Каждый игрок видит только свои загаданные слова (подсвечены)</span>
+                    <span>Игроки <b>не видят</b> свои загаданные слова — только мастер!</span>
                   </div>
                   <div className="flex gap-2">
                     <span className="text-purple-400 font-bold">3.</span>
-                    <span>Игроки выбирают слова по подсказке и нажимают «Подтвердить»</span>
+                    <span>Можно выбрать максимум N слов (по числу из подсказки)</span>
                   </div>
                   <div className="flex gap-2">
                     <span className="text-purple-400 font-bold">4.</span>
-                    <span>Правильные слова становятся зелёными, неправильные — невидимы</span>
+                    <span>Неугаданные слова накапливаются к следующему раунду</span>
                   </div>
                   <div className="flex gap-2">
                     <span className="text-purple-400 font-bold">5.</span>
