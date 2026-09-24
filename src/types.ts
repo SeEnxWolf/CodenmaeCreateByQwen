@@ -18,6 +18,7 @@ export interface Player {
   score: number;
   finished: boolean;
   finishTime?: number;
+  maxSelections: number; // max words player can select this round (from hints)
 }
 
 export interface Hint {
