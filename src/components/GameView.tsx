@@ -109,48 +109,57 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
 
   const latestHint = gameState.hints[gameState.hints.length - 1];
 
-  const getCardStyle = (cardId: string, cardType: string, revealed: boolean) => {
+  const getCardStyle = (cardId: string, cardType: string) => {
+    // Проверяем открыл ли текущий игрок это слово
+    const isRevealedByMe = currentPlayer.revealedWords.includes(cardId);
+    
     if (isMaster) {
       // Мастер видит всё
-      if (revealed) {
-        // Определяем тип открытого слова
-        if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20 opacity-80';
-        if (cardType === 'secret') return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 shadow-lg shadow-green-500/20';
-        // Белое слово открыто — серый с обводкой
+      // Проверяем открыто ли слово кем-то
+      const revealedBySomeone = gameState.players.some(p => p.revealedWords.includes(cardId));
+      
+      if (cardType === 'black') {
+        const blackCard = gameState.cards.find(c => c.id === cardId);
+        if (blackCard?.revealed) {
+          return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20 opacity-80';
+        }
+        return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20';
+      }
+      
+      if (cardType === 'secret') {
+        if (revealedBySomeone) {
+          return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 shadow-lg shadow-green-500/20';
+        }
+        return 'bg-gradient-to-br from-blue-600 to-blue-800 border-blue-400 shadow-lg shadow-blue-500/20';
+      }
+      
+      // Белое слово
+      if (revealedBySomeone) {
         return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 shadow-lg shadow-slate-400/20';
       }
-      if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20';
-      if (cardType === 'secret') return 'bg-gradient-to-br from-blue-600 to-blue-800 border-blue-400 shadow-lg shadow-blue-500/20';
       return 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600';
     }
 
     if (isEliminated) {
       // Дисквалифицированный видит только свои открытые слова
-      const cardData = gameState.cards.find(c => c.id === cardId);
-      if (revealed && cardData && cardData.revealedBy === currentPlayer.id) {
-        if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 opacity-80';
-        if (cardType === 'secret') return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 opacity-80';
+      if (isRevealedByMe) {
+        if (currentPlayer.secretWords.includes(cardId)) {
+          return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 opacity-80';
+        }
         return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 opacity-80';
       }
       return 'bg-gray-800/50 border-gray-700 cursor-not-allowed opacity-70';
     }
 
     // Обычный игрок — НЕ видит свои загаданные слова
-    if (revealed) {
-      // Проверяем кто открыл это слово
-      const card = gameState.cards.find(c => c.id === cardId);
-      if (card && card.revealedBy === currentPlayer.id) {
-        // Это слово открыл текущий игрок
-        if (currentPlayer.revealedWords.includes(cardId)) {
-          // Своё секретное слово — зелёное
-          return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 scale-95 shadow-lg shadow-green-500/20';
-        } else {
-          // Белое слово (открыл зря) — серое
-          return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 opacity-90';
-        }
+    if (isRevealedByMe) {
+      // Это слово открыл текущий игрок
+      if (currentPlayer.secretWords.includes(cardId)) {
+        // Своё секретное слово — зелёное
+        return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 scale-95 shadow-lg shadow-green-500/20';
       } else {
-        // Кто-то другой открыл — для этого игрока выглядит как неоткрытое
-        return 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600 hover:border-purple-500 hover:from-gray-600 hover:to-gray-700 cursor-pointer hover:shadow-lg hover:shadow-purple-500/10';
+        // Белое слово (открыл зря) — серое
+        return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 opacity-90';
       }
     }
 
@@ -159,7 +168,7 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
       return 'bg-gradient-to-br from-yellow-400 to-amber-500 border-yellow-300 scale-105 ring-2 ring-yellow-300 shadow-lg shadow-yellow-500/30';
     }
     
-    // Обычное неоткрытое слово (или открытое кем-то другим)
+    // Обычное неоткрытое слово
     if (isThinking) {
       return 'bg-gradient-to-br from-gray-700/60 to-gray-800/60 border-gray-600/50 cursor-not-allowed opacity-60';
     }
@@ -233,7 +242,11 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
               {p.name}
               {p.finished && ' 🏆'}
               {p.isEliminated && ' 💀'}
-              {!p.isMaster && !p.isEliminated && !p.finished && ` (✓${p.score})`}
+              {!p.isMaster && !p.isEliminated && !p.finished && (
+                <span className={p.score >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {' '}({p.score >= 0 ? '+' : ''}{p.score})
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -309,10 +322,18 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
             animate={{ opacity: 1 }}
             className="mb-3 bg-gray-800/40 border border-gray-700 rounded-xl p-3 sm:p-4 backdrop-blur-sm"
           >
-            <h3 className="text-white font-semibold text-sm flex items-center gap-2 mb-3">
-              <Crown size={14} className="text-yellow-400" />
-              Панель мастера
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-white font-semibold text-sm flex items-center gap-2">
+                <Crown size={14} className="text-yellow-400" />
+                Панель мастера
+              </h3>
+              <div className="flex items-center gap-2 bg-yellow-900/30 px-3 py-1 rounded-lg border border-yellow-700/50">
+                <span className="text-yellow-400 text-xs">Очки:</span>
+                <span className={`text-lg font-bold ${gameState.masterScore >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {gameState.masterScore}
+                </span>
+              </div>
+            </div>
 
             {/* Hint input */}
             <div className="flex flex-wrap gap-2 items-end">
@@ -445,8 +466,8 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           {gameState.cards.map((card, idx) => {
             // Для игроков: карточка считается "открытой" только если её открыл текущий игрок
             const isCardRevealedForPlayer = isMaster 
-              ? card.revealed 
-              : (card.revealed && card.revealedBy === currentPlayer.id);
+              ? (card.type === 'black' && card.revealed) || gameState.players.some(p => p.revealedWords.includes(card.id))
+              : currentPlayer.revealedWords.includes(card.id);
             
             return (
               <motion.button
@@ -460,8 +481,7 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
                 disabled={isEliminated || isCardRevealedForPlayer}
                 className={`aspect-square rounded-lg sm:rounded-xl border-2 flex items-center justify-center p-1 sm:p-2 transition-all duration-200 ${getCardStyle(
                   card.id,
-                  card.type,
-                  card.revealed
+                  card.type
                 )}`}
               >
                 <span className="text-white font-medium text-center text-[10px] sm:text-xs leading-tight drop-shadow-sm">
@@ -707,8 +727,12 @@ function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; current
           {gameState.cards.map((card, idx) => {
             let bgColor = 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600';
             let label = '';
+            
+            // Проверяем открыто ли слово кем-то
+            const revealedBySomeone = gameState.players.some(p => p.revealedWords.includes(card.id));
+            
             if (card.type === 'secret') {
-              if (card.revealed) {
+              if (revealedBySomeone) {
                 bgColor = 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400';
                 label = '✅';
               } else {
@@ -716,8 +740,11 @@ function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; current
                 label = '🔵';
               }
             }
-            if (card.type === 'black') { bgColor = 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500'; label = '⚫'; }
-            if (card.type === 'normal' && card.revealed) {
+            if (card.type === 'black') { 
+              bgColor = 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500'; 
+              label = '⚫'; 
+            }
+            if (card.type === 'normal' && revealedBySomeone) {
               bgColor = 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300';
               label = '⚪';
             }
@@ -789,7 +816,9 @@ function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; current
                   <span className="text-white text-sm">{p.name}</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-300">✓ {p.score} слов</span>
+                  <span className={p.score >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    {p.score >= 0 ? '+' : ''}{p.score} очков
+                  </span>
                   {p.finished && <span className="text-green-400">🏆</span>}
                   {p.isEliminated && <span className="text-red-400">💀</span>}
                 </div>
