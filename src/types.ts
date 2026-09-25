@@ -2,8 +2,8 @@ export interface WordCard {
   id: string;
   word: string;
   type: 'normal' | 'secret' | 'black';
-  revealed: boolean;
-  revealedBy?: string; // player id who revealed it
+  revealed: boolean; // только для чёрного слова
+  revealedBy?: string; // player id who revealed it (только для чёрного)
 }
 
 export interface Player {
@@ -45,6 +45,7 @@ export interface GameState {
   roundPhase: 'thinking' | 'guessing'; // thinking = мастер думает, guessing = игроки угадывают
   phaseEndTime: number; // timestamp когда фаза закончится
   timerEnabled: boolean;
+  masterScore: number; // очки мастера
 }
 
 export type SyncMessage =

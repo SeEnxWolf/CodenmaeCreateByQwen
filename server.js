@@ -205,7 +205,8 @@ function handleMessage(ws, message) {
         phase: 'lobby',
         roundPhase: 'thinking',
         phaseEndTime: 0,
-        timerEnabled: true
+        timerEnabled: true,
+        masterScore: 0
       };
       
       rooms.set(roomId, state);
@@ -321,10 +322,11 @@ function handleMessage(ws, message) {
       if (!player || player.isEliminated || player.hasConfirmed) return;
       
       let correctCount = 0;
+      let wrongCount = 0;
       
       for (const wordId of player.selectedWords) {
         const card = room.cards.find(c => c.id === wordId);
-        if (!card || card.revealed) continue;
+        if (!card) continue;
         
         if (card.type === 'black') {
           // Чёрное слово — дисквалификация
@@ -336,34 +338,50 @@ function handleMessage(ws, message) {
         
         if (player.secretWords.includes(wordId)) {
           // Своё секретное слово — угадал! (зелёное)
-          card.revealed = true;
-          card.revealedBy = player.id;
-          player.revealedWords.push(wordId);
-          player.score++;
-          correctCount++;
+          // Не помечаем card.revealed - только добавляем в player.revealedWords
+          if (!player.revealedWords.includes(wordId)) {
+            player.revealedWords.push(wordId);
+            player.score++;
+            correctCount++;
+          }
         } else {
-          // Белое слово — тоже открывается (видят все), но не засчитывается
-          card.revealed = true;
-          card.revealedBy = player.id;
+          // Белое слово — промах, -1 балл
+          // Не помечаем card.revealed - только добавляем в player.revealedWords
+          if (!player.revealedWords.includes(wordId)) {
+            player.revealedWords.push(wordId);
+            player.score--;
+            wrongCount++;
+          }
         }
       }
       
       // Уменьшаем maxSelections на количество правильных слов
       player.maxSelections = Math.max(0, player.maxSelections - correctCount);
       
+      // Обновляем очки мастера
+      // +1 за каждое правильно угаданное слово
+      room.masterScore += correctCount;
+      // -1 за каждое неправильно угаданное (белое) слово
+      room.masterScore -= wrongCount;
+      // -5 за дисквалификацию
+      if (player.isEliminated) {
+        room.masterScore -= 5;
+      }
+      
       // Помечаем что игрок ответил
       player.hasConfirmed = true;
       player.selectedWords = [];
       
+      // Проверяем победу - все секретные слова в revealedWords
       const allSecretRevealed = player.secretWords.length > 0 && 
-        player.secretWords.every(id => {
-          const card = room.cards.find(c => c.id === id);
-          return card?.revealed;
-        });
+        player.secretWords.every(id => player.revealedWords.includes(id));
       
       if (allSecretRevealed && !player.isEliminated) {
         player.finished = true;
         player.finishTime = Date.now();
+        
+        // Бонус мастеру +10 за каждого завершившего игрока
+        room.masterScore += 10;
         
         const firstFinisher = room.players
           .filter(p => p.finished)
@@ -381,7 +399,7 @@ function handleMessage(ws, message) {
         state: room
       });
       
-      console.log(`✅ ${player.name} подтвердил выбор в комнате ${room.roomId}`);
+      console.log(`✅ ${player.name} подтвердил выбор в комнате ${room.roomId} (+${correctCount}/-${wrongCount})`);
       break;
     }
     
@@ -494,9 +512,12 @@ function handlePhaseTimeout(roomId) {
         // Автоматически подтверждаем
         let correctCount = 0;
         
+        let correctCount = 0;
+        let wrongCount = 0;
+        
         for (const wordId of player.selectedWords) {
           const card = room.cards.find(c => c.id === wordId);
-          if (!card || card.revealed) continue;
+          if (!card) continue;
           
           if (card.type === 'black') {
             player.isEliminated = true;
@@ -507,15 +528,18 @@ function handlePhaseTimeout(roomId) {
           
           if (player.secretWords.includes(wordId)) {
             // Своё секретное слово — угадал! (зелёное)
-            card.revealed = true;
-            card.revealedBy = player.id;
-            player.revealedWords.push(wordId);
-            player.score++;
-            correctCount++;
+            if (!player.revealedWords.includes(wordId)) {
+              player.revealedWords.push(wordId);
+              player.score++;
+              correctCount++;
+            }
           } else {
-            // Белое слово — тоже открывается
-            card.revealed = true;
-            card.revealedBy = player.id;
+            // Белое слово — промах, -1 балл
+            if (!player.revealedWords.includes(wordId)) {
+              player.revealedWords.push(wordId);
+              player.score--;
+              wrongCount++;
+            }
           }
         }
         
@@ -523,16 +547,16 @@ function handlePhaseTimeout(roomId) {
         player.selectedWords = [];
         player.hasConfirmed = true;
         
-        // Проверяем победу
+        // Проверяем победу - все секретные слова в revealedWords
         const allSecretRevealed = player.secretWords.length > 0 && 
-          player.secretWords.every(id => {
-            const card = room.cards.find(c => c.id === id);
-            return card?.revealed;
-          });
+          player.secretWords.every(id => player.revealedWords.includes(id));
         
         if (allSecretRevealed && !player.isEliminated) {
           player.finished = true;
           player.finishTime = Date.now();
+          
+          // Бонус мастеру +10 за каждого завершившего игрока
+          room.masterScore += 10;
           
           const firstFinisher = room.players
             .filter(p => p.finished)
