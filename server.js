@@ -190,6 +190,7 @@ function handleMessage(ws, message) {
         score: 0,
         finished: false,
         maxSelections: 0,
+        hasConfirmed: false,
         ws
       };
       
@@ -239,6 +240,7 @@ function handleMessage(ws, message) {
         score: 0,
         finished: false,
         maxSelections: 0,
+        hasConfirmed: false,
         ws
       };
       
@@ -290,7 +292,7 @@ function handleMessage(ws, message) {
       if (room.roundPhase === 'thinking') return;
       
       const player = room.players.find(p => p.id === message.playerId);
-      if (!player || player.isEliminated) return;
+      if (!player || player.isEliminated || player.hasConfirmed) return;
       
       if (player.selectedWords.includes(message.wordId)) {
         // Снимаем выделение
@@ -316,15 +318,16 @@ function handleMessage(ws, message) {
       if (!room) return;
       
       const player = room.players.find(p => p.id === message.playerId);
-      if (!player || player.isEliminated) return;
+      if (!player || player.isEliminated || player.hasConfirmed) return;
       
       let correctCount = 0;
       
       for (const wordId of player.selectedWords) {
         const card = room.cards.find(c => c.id === wordId);
-        if (!card) continue;
+        if (!card || card.revealed) continue;
         
         if (card.type === 'black') {
+          // Чёрное слово — дисквалификация
           player.isEliminated = true;
           card.revealed = true;
           card.revealedBy = player.id;
@@ -332,20 +335,24 @@ function handleMessage(ws, message) {
         }
         
         if (player.secretWords.includes(wordId)) {
-          if (!card.revealed) {
-            card.revealed = true;
-            card.revealedBy = player.id;
-            player.revealedWords.push(wordId);
-            player.score++;
-            correctCount++;
-          }
+          // Своё секретное слово — угадал! (зелёное)
+          card.revealed = true;
+          card.revealedBy = player.id;
+          player.revealedWords.push(wordId);
+          player.score++;
+          correctCount++;
+        } else {
+          // Белое слово — тоже открывается (видят все), но не засчитывается
+          card.revealed = true;
+          card.revealedBy = player.id;
         }
       }
       
       // Уменьшаем maxSelections на количество правильных слов
-      // (неправильные не тратят лимит — они просто не засчитываются)
       player.maxSelections = Math.max(0, player.maxSelections - correctCount);
       
+      // Помечаем что игрок ответил
+      player.hasConfirmed = true;
       player.selectedWords = [];
       
       const allSecretRevealed = player.secretWords.length > 0 && 
@@ -434,6 +441,7 @@ function handleMessage(ws, message) {
       room.phaseEndTime = Date.now() + 90000; // 1.5 минуты на раздумье
       room.players.forEach(p => {
         p.selectedWords = [];
+        p.hasConfirmed = false;
       });
       
       // Запускаем таймер
@@ -488,7 +496,7 @@ function handlePhaseTimeout(roomId) {
         
         for (const wordId of player.selectedWords) {
           const card = room.cards.find(c => c.id === wordId);
-          if (!card) continue;
+          if (!card || card.revealed) continue;
           
           if (card.type === 'black') {
             player.isEliminated = true;
@@ -498,18 +506,22 @@ function handlePhaseTimeout(roomId) {
           }
           
           if (player.secretWords.includes(wordId)) {
-            if (!card.revealed) {
-              card.revealed = true;
-              card.revealedBy = player.id;
-              player.revealedWords.push(wordId);
-              player.score++;
-              correctCount++;
-            }
+            // Своё секретное слово — угадал! (зелёное)
+            card.revealed = true;
+            card.revealedBy = player.id;
+            player.revealedWords.push(wordId);
+            player.score++;
+            correctCount++;
+          } else {
+            // Белое слово — тоже открывается
+            card.revealed = true;
+            card.revealedBy = player.id;
           }
         }
         
         player.maxSelections = Math.max(0, player.maxSelections - correctCount);
         player.selectedWords = [];
+        player.hasConfirmed = true;
         
         // Проверяем победу
         const allSecretRevealed = player.secretWords.length > 0 && 
@@ -539,6 +551,10 @@ function handlePhaseTimeout(roomId) {
     room.currentRound++;
     room.roundPhase = 'thinking';
     room.phaseEndTime = Date.now() + 90000;
+    room.players.forEach(p => {
+      p.hasConfirmed = false;
+      p.selectedWords = [];
+    });
     
     broadcast(roomId, {
       type: 'state_update',
