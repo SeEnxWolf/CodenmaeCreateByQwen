@@ -70,6 +70,9 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
     // Блокируем выбор во время фазы thinking
     if (isThinking) return;
     
+    // Блокируем после подтверждения
+    if (currentPlayer.hasConfirmed) return;
+    
     // Проверяем лимит выбора
     const isDeselecting = currentPlayer.selectedWords.includes(wordId);
     if (!isDeselecting && currentPlayer.selectedWords.length >= currentPlayer.maxSelections) {
@@ -109,7 +112,13 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
   const getCardStyle = (cardId: string, cardType: string, revealed: boolean) => {
     if (isMaster) {
       // Мастер видит всё
-      if (revealed) return 'bg-gray-600 border-gray-500 opacity-50';
+      if (revealed) {
+        // Определяем тип открытого слова
+        if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20 opacity-80';
+        if (cardType === 'secret') return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 shadow-lg shadow-green-500/20';
+        // Белое слово открыто — серый с обводкой
+        return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 shadow-lg shadow-slate-400/20';
+      }
       if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500/50 shadow-lg shadow-red-500/20';
       if (cardType === 'secret') return 'bg-gradient-to-br from-blue-600 to-blue-800 border-blue-400 shadow-lg shadow-blue-500/20';
       return 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600';
@@ -117,18 +126,22 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
 
     if (isEliminated) {
       // Дисквалифицированный видит только открытые
-      if (revealed) return 'bg-gray-600 border-gray-500 opacity-50';
+      if (revealed) {
+        if (cardType === 'black') return 'bg-gradient-to-br from-gray-900 to-black border-red-800 opacity-80';
+        if (cardType === 'secret') return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 opacity-80';
+        return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 opacity-80';
+      }
       return 'bg-gray-800/50 border-gray-700 cursor-not-allowed opacity-70';
     }
 
     // Обычный игрок — НЕ видит свои загаданные слова
     if (revealed && currentPlayer.revealedWords.includes(cardId)) {
-      // Это слово игрок уже открыл (правильно)
+      // Это слово игрок уже открыл (правильно) — зелёное
       return 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400 scale-95 shadow-lg shadow-green-500/20';
     }
     if (revealed) {
-      // Кто-то другой открыл
-      return 'bg-gray-600 border-gray-500 opacity-60';
+      // Кто-то другой открыл (белое слово) — серое
+      return 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300 opacity-90';
     }
 
     // Выбранное слово
@@ -316,7 +329,7 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
               </div>
               <button
                 onClick={handleGiveHint}
-                disabled={!hintWord.trim()}
+                disabled={!hintWord.trim() || !isThinking}
                 className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Дать подсказку
@@ -329,15 +342,48 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
                   Пропустить →
                 </button>
               )}
-              {!isThinking && (
-                <button
-                  onClick={handleNextRound}
-                  className="px-3 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-500 transition"
-                >
-                  Далее →
-                </button>
-              )}
+              {!isThinking && (() => {
+                const activePlayers = gameState.players.filter(p => !p.isMaster && !p.isEliminated && !p.finished);
+                const confirmedCount = activePlayers.filter(p => p.hasConfirmed).length;
+                const allConfirmed = confirmedCount === activePlayers.length;
+                return (
+                  <button
+                    onClick={handleNextRound}
+                    disabled={!allConfirmed && activePlayers.length > 0}
+                    className="px-3 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={!allConfirmed ? `Ожидайте всех игроков (${confirmedCount}/${activePlayers.length})` : ''}
+                  >
+                    Далее →
+                  </button>
+                );
+              })()}
             </div>
+            
+            {/* Status of player answers during guessing phase */}
+            {!isThinking && (
+              <div className="mt-3 pt-3 border-t border-gray-700/50">
+                <p className="text-gray-400 text-xs mb-2">Ответы игроков:</p>
+                <div className="flex flex-wrap gap-2">
+                  {gameState.players.filter(p => !p.isMaster).map(p => (
+                    <div
+                      key={p.id}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs border ${
+                        p.isEliminated
+                          ? 'bg-red-900/20 border-red-700/50 text-red-300'
+                          : p.finished
+                          ? 'bg-green-900/20 border-green-700/50 text-green-300'
+                          : p.hasConfirmed
+                          ? 'bg-green-900/20 border-green-600/50 text-green-300'
+                          : 'bg-yellow-900/20 border-yellow-700/50 text-yellow-300 animate-pulse'
+                      }`}
+                    >
+                      {p.isEliminated ? '💀' : p.finished ? '🏆' : p.hasConfirmed ? '✅' : '⏳'}
+                      <span>{p.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
@@ -422,19 +468,26 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
           </motion.div>
         )}
 
-        {/* Confirm button */}
-        {!isMaster && !isEliminated && currentPlayer.selectedWords.length > 0 && (
+        {/* Confirm button / waiting state */}
+        {!isMaster && !isEliminated && !currentPlayer.finished && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex justify-center"
           >
-            <button
-              onClick={handleConfirm}
-              className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-500 hover:to-emerald-500 transition transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20"
-            >
-              ✓ Подтвердить выбор ({currentPlayer.selectedWords.length}/{currentPlayer.maxSelections})
-            </button>
+            {currentPlayer.hasConfirmed ? (
+              <div className="px-6 py-3 bg-green-900/30 border border-green-600/50 text-green-300 font-semibold rounded-xl flex items-center gap-2">
+                ✅ Вы ответили! Ожидайте остальных...
+              </div>
+            ) : (
+              <button
+                onClick={handleConfirm}
+                disabled={currentPlayer.selectedWords.length === 0}
+                className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-500 hover:to-emerald-500 transition transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                ✓ Подтвердить ({currentPlayer.selectedWords.length}/{currentPlayer.maxSelections})
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -447,12 +500,16 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
                 <span className="text-gray-400">Загаданные</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-900 to-black border border-red-800"></div>
-                <span className="text-gray-400">Чёрное</span>
+                <div className="w-3 h-3 rounded bg-gradient-to-br from-green-500 to-emerald-600 border border-green-400"></div>
+                <span className="text-gray-400">Угаданные</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-700 to-gray-800 border border-gray-600"></div>
-                <span className="text-gray-400">Обычные</span>
+                <div className="w-3 h-3 rounded bg-gradient-to-br from-slate-400 to-slate-500 border border-slate-300"></div>
+                <span className="text-gray-400">Белые (открыты зря)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-900 to-black border border-red-800"></div>
+                <span className="text-gray-400">Чёрное</span>
               </div>
             </>
           ) : !isEliminated ? (
@@ -464,6 +521,10 @@ export function GameView({ wsClient, gameState, currentPlayer, onLeave }: Props)
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded bg-gradient-to-br from-green-500 to-emerald-600 border border-green-400"></div>
                 <span className="text-gray-400">Угаданные</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded bg-gradient-to-br from-slate-400 to-slate-500 border border-slate-300"></div>
+                <span className="text-gray-400">Открытые (не ваши)</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-700 to-gray-800 border border-gray-600"></div>
@@ -633,8 +694,20 @@ function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; current
           {gameState.cards.map((card, idx) => {
             let bgColor = 'bg-gradient-to-br from-gray-700 to-gray-800 border-gray-600';
             let label = '';
-            if (card.type === 'secret') { bgColor = 'bg-gradient-to-br from-blue-600 to-blue-800 border-blue-400'; label = '🔵'; }
+            if (card.type === 'secret') {
+              if (card.revealed) {
+                bgColor = 'bg-gradient-to-br from-green-500 to-emerald-600 border-green-400';
+                label = '✅';
+              } else {
+                bgColor = 'bg-gradient-to-br from-blue-600 to-blue-800 border-blue-400';
+                label = '🔵';
+              }
+            }
             if (card.type === 'black') { bgColor = 'bg-gradient-to-br from-gray-900 to-black border-red-800 ring-2 ring-red-500'; label = '⚫'; }
+            if (card.type === 'normal' && card.revealed) {
+              bgColor = 'bg-gradient-to-br from-slate-400 to-slate-500 border-slate-300';
+              label = '⚪';
+            }
 
             return (
               <motion.div
@@ -657,12 +730,16 @@ function GameOverOverlay({ gameState, onLeave }: { gameState: GameState; current
             <span className="text-gray-300">Загаданные</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-900 to-black border border-red-800"></div>
-            <span className="text-gray-300">Чёрное</span>
+            <div className="w-3 h-3 rounded bg-gradient-to-br from-green-500 to-emerald-600 border border-green-400"></div>
+            <span className="text-gray-300">Угаданные</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-700 to-gray-800 border border-gray-600"></div>
-            <span className="text-gray-300">Обычные</span>
+            <div className="w-3 h-3 rounded bg-gradient-to-br from-slate-400 to-slate-500 border border-slate-300"></div>
+            <span className="text-gray-300">Белые (открыты зря)</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 rounded bg-gradient-to-br from-gray-900 to-black border border-red-800"></div>
+            <span className="text-gray-300">Чёрное</span>
           </div>
         </div>
       </div>
