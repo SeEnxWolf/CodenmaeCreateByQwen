@@ -274,7 +274,7 @@ function HomeScreen({ playerName, setPlayerName, error, setError, connectionStat
                   </div>
                   <div className="flex gap-2">
                     <span className="text-purple-400 font-bold">4.</span>
-                    <span>Неугаданные слова накапливаются к следующему раунду</span>
+                    <span>Каждый видит только <b>свои</b> открытые слова (зелёные/серые)</span>
                   </div>
                   <div className="flex gap-2">
                     <span className="text-purple-400 font-bold">5.</span>
